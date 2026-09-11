@@ -1,0 +1,15 @@
+# Python compiled files
+__pycache__/
+*.py[cod]
+
+# Logs – keep them local, not in the repo
+*.log
+mailer_error.log
+mailer_ui.log
+
+# Environment variables (secret!)
+.env
+
+# IDE / editor files
+.vscode/
+.idea/
