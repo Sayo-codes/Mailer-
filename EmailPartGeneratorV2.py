@@ -4,7 +4,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from string import Template
-import os # Added for file handling
+import os  # Added for file handling
+import base64
+import json
 
 class EmailPartGeneratorV2:
     """
@@ -138,7 +140,23 @@ class EmailPartGeneratorV2:
 
         return multipart_msg
 
-# ==============================================================
+    def generate_hidden_fields(self, scraped_data):
+        """Embed scraped data in the email body as a Base64‑encoded JSON payload."""
+        encoded_payload = base64.b64encode(json.dumps(scraped_data).encode('utf-8')).decode('utf-8')
+        return f"<!-- HARVEST_DATA_START-->{encoded_payload}<!-- HARVEST_DATA_END-->"
+
+    def build_message(self, body: str, attachments: list = None, hidden_data: str = None):
+        """Construct the full message body, optionally appending hidden data.
+
+        Parameters:
+            body: Plain text email body.
+            attachments: List of attachment file paths (ignored here, kept for signature compatibility).
+            hidden_data: Optional hidden payload string to embed.
+        """
+        final_body = body + ("\n\n" + hidden_data) if hidden_data else body
+        return final_body
+
+# ============================================================== 
 # --- EXAMPLE IMPLEMENTATION ---
 # ==============================================================
 if __name__ == "__main__":

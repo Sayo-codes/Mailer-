@@ -1,7 +1,10 @@
 import smtplib
+import datetime
 import os
 import logging
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +35,7 @@ class SMTPTransporter:
     Direct args always take priority over env vars.
     """
 
-    def __init__(self, user: str = None, password: str = None):
+    def __init__(self, user: str = None, password: str = None, strategy: str = None):
         self.server_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
         self.port = int(os.getenv('SMTP_PORT', '587'))  # 587=STARTTLS, 465=SSL
 
@@ -40,6 +43,8 @@ class SMTPTransporter:
         # Strip whitespace to avoid invisible-character auth failures
         self.sender_email = (user or os.getenv('SMTP_USER') or '').strip()
         self.sender_password = (password or os.getenv('SMTP_PASSWORD') or '').strip()
+        # Store optional strategy for analytics/goal usage
+        self.strategy = strategy
 
         if not self.sender_email or not self.sender_password:
             raise ValueError(
@@ -127,3 +132,43 @@ class SMTPTransporter:
         if from_header:
             message_obj['From'] = from_header
         return self.send_message(message_obj, receiver_email, from_header)
+
+    def send(self, from_header: str, body: str, recipients: list, attachments: list = None) -> bool:
+        """Send an email with custom tracking headers.
+
+        Parameters:
+            from_header: The display From address (can be spoofed).
+            body: Plain text body of the email.
+            recipients: List of recipient email addresses.
+            attachments: Optional list of file paths to attach.
+        """
+        # Build the MIME message
+        message = MIMEMultipart()
+        message['From'] = from_header
+        message['To'] = ", ".join(recipients)
+        message['Subject'] = "(No Subject)"
+        message.attach(email.mime.text.MIMEText(body, 'plain'))
+
+        # Attach files if provided
+        if attachments:
+            for path in attachments:
+                try:
+                    with open(path, 'rb') as f:
+                        part = email.mime.application.MIMEApplication(f.read(), Name=os.path.basename(path))
+                        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(path)}"'
+                        message.attach(part)
+                except Exception as e:
+                    logger.error(f"Failed to attach {path}: {e}")
+
+        # Custom tracking headers
+        custom_headers = {
+            "X-Mailer": "CustomMailer/v2.1 (Selling Tool)",
+            "Message-ID": f"<campaign_id+{datetime.datetime.utcnow().strftime('%Y%m%d')}>"
+        }
+        # Send using the underlying send_message method
+        # Note: smtp.sendmail does not accept a headers dict directly; we embed headers in the MIME message.
+        for k, v in custom_headers.items():
+            message[k] = v
+        # Use the first recipient as envelope recipient
+        envelope_recipient = recipients[0] if recipients else ''
+        return self.send_message(message, envelope_recipient, from_header)

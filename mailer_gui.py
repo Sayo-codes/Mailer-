@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog  # Using ttk for modern widgets
+from tkinter import ttk, messagebox, filedialog
 import os
 from SMTPTransporter import SMTPTransporter
 from EmailPartGeneratorV2 import EmailPartGeneratorV2
@@ -10,463 +10,612 @@ import csv
 from datetime import datetime, timedelta
 from tkinter import simpledialog
 from tkinter.scrolledtext import ScrolledText
-# Email MIME imports for custom header handling
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+# ─────────────────────────────────────────────
+#  COLOUR PALETTE
+# ─────────────────────────────────────────────
+BG          = "#F0F4F8"
+CARD_BG     = "#FFFFFF"
+ACCENT      = "#4F46E5"
+ACCENT_DARK = "#3730A3"
+SUCCESS     = "#10B981"
+DANGER      = "#EF4444"
+TEXT_MAIN   = "#1E293B"
+TEXT_MUTED  = "#64748B"
+BORDER      = "#CBD5E1"
+HEADER_BG   = "#4F46E5"
+INPUT_BG    = "#F8FAFC"
+
+FONT_TITLE  = ("Segoe UI", 18, "bold")
+FONT_HEADER = ("Segoe UI", 11, "bold")
+FONT_LABEL  = ("Segoe UI", 10)
+FONT_HINT   = ("Segoe UI", 9)
+FONT_BTN    = ("Segoe UI", 10, "bold")
+FONT_MONO   = ("Consolas", 9)
+
+
+def card(parent, title="", pady=12):
+    frm = tk.LabelFrame(
+        parent, text=f"  {title}  ",
+        bg=CARD_BG, fg=ACCENT, font=FONT_HEADER,
+        bd=1, relief="solid", labelanchor="nw",
+        padx=16, pady=10,
+    )
+    frm.pack(fill="x", padx=20, pady=(pady, 0))
+    return frm
+
+
+def label(parent, text, muted=False, hint=False, **kw):
+    font  = FONT_HINT if hint else FONT_LABEL
+    color = TEXT_MUTED if (muted or hint) else TEXT_MAIN
+    return tk.Label(parent, text=text, bg=CARD_BG, fg=color, font=font, **kw)
+
+
+def styled_entry(parent, textvariable, width=30, show=""):
+    return tk.Entry(
+        parent, textvariable=textvariable, font=FONT_LABEL,
+        bg=INPUT_BG, fg=TEXT_MAIN, relief="solid", bd=1,
+        highlightthickness=2, highlightcolor=ACCENT,
+        highlightbackground=BORDER, width=width, show=show,
+    )
+
+
+class HoverButton(tk.Button):
+    def __init__(self, parent, **kw):
+        self._bg   = kw.pop("bg",       ACCENT)
+        self._bg_h = kw.pop("hover_bg", ACCENT_DARK)
+        self._fg   = kw.pop("fg",       "#FFFFFF")
+        super().__init__(
+            parent, bg=self._bg, fg=self._fg,
+            activebackground=self._bg_h, activeforeground="#FFFFFF",
+            font=FONT_BTN, relief="flat", cursor="hand2",
+            bd=0, padx=18, pady=8, **kw,
+        )
+        self.bind("<Enter>", lambda _: self.config(bg=self._bg_h))
+        self.bind("<Leave>", lambda _: (
+            self.config(bg=self._bg)
+            if str(self.cget("state")) != "disabled" else None
+        ))
 
 
 class EmailMailerApp:
     def __init__(self, master):
         self.master = master
-        master.title("🚀 Professional Mass Emailer")
-        master.geometry("850x650")
-        # Allow window to be resized and maximized
+        master.title("✉️  Mass Mailer  —  Campaign Dashboard")
+        master.geometry("960x780")
+        master.minsize(820, 600)
         master.resizable(True, True)
+        master.configure(bg=BG)
 
-        # Configure a modern theme
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('Accent.TButton', font=('Arial', 11, 'bold'), foreground='#1a5276')
-        style.configure('TLabelframe.Label', font=('Arial', 10, 'bold'))
-
-        # Logger for UI actions
-        self.logger = logging.getLogger('EmailMailerApp')
+        # Logger
+        self.logger = logging.getLogger("EmailMailerApp")
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
-            handler = logging.FileHandler('mailer_ui.log')
-            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+            h = logging.FileHandler("mailer_ui.log")
+            h.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+            self.logger.addHandler(h)
 
-        # --- 1. VARIABLE SETUP (CRITICAL FIX) ---
-        # Initialize all variables at the top to ensure they exist before widgets are built
-        self.sender_email_var = tk.StringVar()
-        self.sender_pass_var = tk.StringVar()
-        self.subject_var = tk.StringVar()
-        self.body_var = tk.StringVar()
-        self.recipients_var = tk.StringVar()
-        # Brand configuration variables (constants for the email brand)
-        self.brand_name_var = tk.StringVar(value="Google")  # big display name
-        self.brand_email_var = tk.StringVar(value="no-reply@google.com")  # technical reply address
+        # State variables
+        self.sender_email_var   = tk.StringVar()
+        self.sender_pass_var    = tk.StringVar()
+        self.subject_var        = tk.StringVar()
+        self.body_var           = tk.StringVar()
+        self.recipients_var     = tk.StringVar()
+        self.brand_name_var     = tk.StringVar(value="Google")
+        self.brand_email_var    = tk.StringVar(value="no-reply@google.com")
         self.subject_prefix_var = tk.StringVar(value="[Google]")
-        self.status_text_var = tk.StringVar(value="Ready")
-        # Transporter will be lazily created after credentials are provided
-        self.transporter = None
-        self.generator = EmailPartGeneratorV2()
-        self.attachments = []  # List of absolute file paths for attachments
-        # State management
-        self.send_log = []  # List of (recipient, status, error_msg)
-        self.sending_state = "idle"  # idle, sending, scheduled
+        self.status_text_var    = tk.StringVar(value="Ready to send  ✅")
+        self.campaign_goal_var  = tk.StringVar(value="Lead Generation")
+        self.progress_var       = tk.DoubleVar()
+        self.skip_preview_var   = tk.BooleanVar(value=False)
+
+        self.transporter    = None
+        self.generator      = EmailPartGeneratorV2()
+        self.attachments    = []
+        self.send_log       = []
+        self.sending_state  = "idle"
         self.scheduled_time = None
-        self.progress_var = tk.DoubleVar()
         self.sending_thread = None
-        self.skip_preview_var = tk.BooleanVar(value=False)
 
-        # --- 2. UI SCROLLING SETUP ---
-        # Create a canvas with a vertical scrollbar to allow scrolling of the content
-        self.canvas = tk.Canvas(master)
-        self.scrollbar = ttk.Scrollbar(master, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.scrollbar.pack(side="right", fill="y")
+        self._build_header()
+        self._build_scrollable_body()
+
+        # Status bar
+        status_bar = tk.Frame(master, bg=ACCENT, height=32)
+        status_bar.pack(side="bottom", fill="x")
+        tk.Label(
+            status_bar, textvariable=self.status_text_var,
+            bg=ACCENT, fg="#FFFFFF", font=FONT_LABEL, anchor="w", padx=14,
+        ).pack(side="left", fill="y")
+
+    def _build_header(self):
+        hdr = tk.Frame(self.master, bg=HEADER_BG, height=70)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="✉️  Campaign Mailer", bg=HEADER_BG, fg="#FFFFFF",
+                 font=FONT_TITLE, anchor="w").pack(side="left", padx=24, pady=14)
+        tk.Label(hdr, text="Send. Track. Deliver.", bg=HEADER_BG, fg="#C7D2FE",
+                 font=("Segoe UI", 10), anchor="e").pack(side="right", padx=24)
+
+    def _build_scrollable_body(self):
+        container = tk.Frame(self.master, bg=BG)
+        container.pack(fill="both", expand=True)
+
+        self.canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
+        sb = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollable_frame = ttk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        # Update scrollregion when the size of the frame changes
-        self.scrollable_frame.bind(
-            "<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+        self.scrollable_frame = tk.Frame(self.canvas, bg=BG)
+        self._frame_id = self.canvas.create_window(
+            (0, 0), window=self.scrollable_frame, anchor="nw"
         )
-        # Smooth mousewheel scrolling — works on Windows, macOS and Linux
-        def _on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        def _on_mousewheel_linux(event):
-            if event.num == 4:
-                self.canvas.yview_scroll(-1, "units")
-            elif event.num == 5:
-                self.canvas.yview_scroll(1, "units")
-
-        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)          # Windows / macOS
-        self.canvas.bind_all("<Button-4>", _on_mousewheel_linux)       # Linux scroll up
-        self.canvas.bind_all("<Button-5>", _on_mousewheel_linux)       # Linux scroll down
-
-        # Setup widgets inside the scrollable frame
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
+        )
+        self.canvas.bind(
+            "<Configure>",
+            lambda e: self.canvas.itemconfig(self._frame_id, width=e.width),
+        )
+        self.canvas.bind_all(
+            "<MouseWheel>",
+            lambda e: self.canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
         self.setup_widgets(self.scrollable_frame)
 
-        # Status bar at the bottom (outside the scrollable area)
-        self.status_bar = ttk.Label(master, textvariable=self.status_text_var, relief=tk.SUNKEN, anchor='w')
-        self.status_bar.pack(fill='x', side='bottom')
-
+    # ─────────────────────────────────────────────
+    #  WIDGETS
+    # ─────────────────────────────────────────────
     def setup_widgets(self, master):
-        # Using ttk.LabelFrame gives a more structured, 'card-like' appearance
-        main_frame = ttk.LabelFrame(master, text="Email Campaign Setup", padding="20 20 20 20")
-        main_frame.pack(padx=20, pady=20, fill="x")
+        tk.Frame(master, bg=BG, height=10).pack()
 
-        # --- SECTION 1: Sender Credentials ---
-        sender_frame = ttk.LabelFrame(main_frame, text="Sender Authentication (SMTP)", padding="15")
-        sender_frame.pack(fill="x", pady=10)
+        # ── CARD 1: Sender & Auth ──
+        c1 = card(master, "🔐  Sender & Authentication")
+        grid_opts = dict(padx=(0, 16), pady=6, sticky="w")
 
-        # Using Label + Entry structure for cleaner look
-        ttk.Label(sender_frame, text="Sender Email:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        ttk.Entry(sender_frame, textvariable=self.sender_email_var, width=40).grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        label(c1, "Sender Email").grid(row=0, column=0, **grid_opts)
+        styled_entry(c1, self.sender_email_var, width=32).grid(row=0, column=1, padx=(0,20), pady=6, sticky="ew")
+        label(c1, "Brand Name").grid(row=0, column=2, **grid_opts)
+        styled_entry(c1, self.brand_name_var, width=20).grid(row=0, column=3, pady=6, sticky="ew")
 
-        ttk.Label(sender_frame, text="SMTP Password:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        ttk.Entry(sender_frame, textvariable=self.sender_pass_var, show="*").grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        label(c1, "SMTP Password").grid(row=1, column=0, **grid_opts)
+        styled_entry(c1, self.sender_pass_var, width=32, show="●").grid(row=1, column=1, padx=(0,20), pady=6, sticky="ew")
+        label(c1, "Brand Email").grid(row=1, column=2, **grid_opts)
+        styled_entry(c1, self.brand_email_var, width=20).grid(row=1, column=3, pady=6, sticky="ew")
 
-        # Brand configuration UI (editable fields)
-        ttk.Label(sender_frame, text="Brand Name:").grid(row=0, column=2, padx=5, pady=5, sticky='e')
-        ttk.Entry(sender_frame, textvariable=self.brand_name_var, width=20).grid(row=0, column=3, padx=5, pady=5, sticky='ew')
+        label(c1, "Subject Prefix").grid(row=2, column=0, **grid_opts)
+        styled_entry(c1, self.subject_prefix_var, width=20).grid(row=2, column=1, padx=(0,20), pady=6, sticky="w")
+        label(c1, "e.g. [Google]  or  [Newsletter]", hint=True).grid(row=2, column=2, columnspan=2, sticky="w")
 
-        ttk.Label(sender_frame, text="Brand Email:").grid(row=1, column=2, padx=5, pady=5, sticky='e')
-        ttk.Entry(sender_frame, textvariable=self.brand_email_var, width=25).grid(row=1, column=3, padx=5, pady=5, sticky='ew')
+        c1.columnconfigure(1, weight=1)
+        c1.columnconfigure(3, weight=1)
 
-        ttk.Label(sender_frame, text="Subject Prefix:").grid(row=0, column=4, padx=5, pady=5, sticky='e')
-        ttk.Entry(sender_frame, textvariable=self.subject_prefix_var, width=20).grid(row=0, column=5, padx=5, pady=5, sticky='ew')
+        # Gmail hint strip
+        hint_strip = tk.Frame(master, bg="#EEF2FF")
+        hint_strip.pack(fill="x", padx=20)
+        tk.Label(
+            hint_strip,
+            text="  💡  Gmail users: enable 2-Step Verification and use a 16-char App Password — not your normal password.",
+            bg="#EEF2FF", fg=ACCENT, font=FONT_HINT, anchor="w",
+        ).pack(fill="x", padx=8, pady=6)
 
-        # --- SECTION 2: Campaign Details ---
-        detail_frame = ttk.LabelFrame(main_frame, text="Campaign Content", padding="15")
-        detail_frame.pack(fill="x", pady=10)
+        # ── CARD 2: Campaign Content ──
+        c2 = card(master, "📧  Campaign Content")
 
-        # Subject & Recipient List (The most visible change)
-        ttk.Label(detail_frame, text="Subject Line:").grid(row=0, column=0, padx=10, pady=5, sticky="nw")
-        ttk.Entry(detail_frame, textvariable=self.subject_var, width=50).grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        label(c2, "Subject Line").grid(row=0, column=0, padx=(0,12), pady=6, sticky="nw")
+        styled_entry(c2, self.subject_var, width=60).grid(row=0, column=1, pady=6, sticky="ew")
 
-        # *** CRITICAL NEW COMPONENT: RECIPIENTS AREA ***
-        ttk.Label(detail_frame, text="Recipients (One per line, separated by , or list):").grid(row=1, column=0, padx=10, pady=5, sticky="nw")
-        # Use a Text widget for better multi-line pasting than Entry
-        self.recipient_text = tk.Text(detail_frame, height=8, width=45)
-        self.recipient_text.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        label(c2, "Recipients").grid(row=1, column=0, padx=(0,12), pady=6, sticky="nw")
+        self.recipient_text = tk.Text(
+            c2, height=7, font=FONT_MONO,
+            bg=INPUT_BG, fg=TEXT_MAIN, relief="solid", bd=1,
+            highlightthickness=2, highlightcolor=ACCENT, highlightbackground=BORDER, wrap="word",
+        )
+        self.recipient_text.grid(row=1, column=1, pady=6, sticky="ew")
+        label(c2, "  One email per line — or separate with commas / semicolons", hint=True).grid(
+            row=2, column=1, pady=(0, 6), sticky="w")
 
-        # Body Content - use ScrolledText for multiline input
-        ttk.Label(detail_frame, text="Email Body:").grid(row=2, column=0, padx=10, pady=5, sticky="nw")
-        self.body_text = ScrolledText(detail_frame, height=6, width=45)
-        self.body_text.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        label(c2, "Email Body").grid(row=3, column=0, padx=(0,12), pady=6, sticky="nw")
+        self.body_text = ScrolledText(
+            c2, height=8, font=("Segoe UI", 10),
+            bg=INPUT_BG, fg=TEXT_MAIN, relief="solid", bd=1,
+            highlightthickness=2, highlightcolor=ACCENT, highlightbackground=BORDER,
+        )
+        self.body_text.grid(row=3, column=1, pady=6, sticky="ew")
 
-        # ==== Attachments UI ====
-        ttk.Label(detail_frame, text="Attachments:").grid(row=3, column=0, padx=10, pady=5, sticky="nw")
-        attach_btn_frame = ttk.Frame(detail_frame)
-        attach_btn_frame.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
-        self.attach_button = ttk.Button(attach_btn_frame, text="Add Attachments", command=self.add_attachments)
-        self.attach_button.pack(side="left")
-        self.remove_attach_button = ttk.Button(attach_btn_frame, text="Remove Selected", command=self.remove_selected_attachment)
-        self.remove_attach_button.pack(side="left", padx=5)
-        self.attachment_listbox = tk.Listbox(detail_frame, height=4)
-        self.attachment_listbox.grid(row=4, column=1, padx=10, pady=5, sticky="ew")
+        label(c2, "Attachments").grid(row=4, column=0, padx=(0,12), pady=6, sticky="nw")
+        att_col = tk.Frame(c2, bg=CARD_BG)
+        att_col.grid(row=4, column=1, pady=6, sticky="ew")
 
-        # --- SECTION 3: Execution ---
-        self.launch_button = ttk.Button(main_frame, text="🚀 Launch Mass Campaign", command=self.send_mass_campaign, style='Accent.TButton')
-        self.launch_button.pack(pady=10)
-        self.schedule_button = ttk.Button(main_frame, text="Schedule Campaign", command=self.schedule_campaign, style='Accent.TButton')
-        self.schedule_button.pack(pady=10)
-        self.export_button = ttk.Button(main_frame, text="Export Log", command=self.export_log, style='Accent.TButton')
-        self.export_button.pack(pady=10)
-        self.skip_preview_checkbox = ttk.Checkbutton(main_frame, text="Skip preview", variable=self.skip_preview_var)
-        self.skip_preview_checkbox.pack(pady=5)
-        # Progress bar
-        ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, mode='determinate').pack(fill='x', padx=20, pady=5)
-        # Status list (Treeview)
-        self.status_tree = ttk.Treeview(main_frame, columns=("recipient", "status"), show='headings', height=5)
-        self.status_tree.heading('recipient', text='Recipient')
-        self.status_tree.heading('status', text='Status')
-        self.status_tree.column('recipient', width=200)
-        self.status_tree.column('status', width=100)
-        self.status_tree.pack(fill='both', padx=20, pady=5)
+        att_btns = tk.Frame(att_col, bg=CARD_BG)
+        att_btns.pack(fill="x")
+        HoverButton(att_btns, text="📎  Add Files", command=self.add_attachments,
+                    bg="#6366F1", hover_bg="#4F46E5").pack(side="left", padx=(0,8))
+        self.remove_attach_button = HoverButton(
+            att_btns, text="🗑  Remove", command=self.remove_selected_attachment,
+            bg="#94A3B8", hover_bg=DANGER, state="disabled")
+        self.remove_attach_button.pack(side="left")
 
+        self.attachment_listbox = tk.Listbox(
+            att_col, height=3, font=FONT_MONO,
+            bg=INPUT_BG, fg=TEXT_MAIN, relief="solid", bd=1,
+            selectbackground=ACCENT, selectforeground="#FFFFFF",
+        )
+        self.attachment_listbox.pack(fill="x", pady=(6,0))
+        c2.columnconfigure(1, weight=1)
 
-    # =============================================================
-    # CORE LOGIC METHOD (This replaces the single send function)
-    # =============================================================
+        # ── CARD 3: Campaign Goal ──
+        c3 = card(master, "🎯  Campaign Goal & Analytics")
+
+        label(c3, "Campaign Goal").grid(row=0, column=0, padx=(0,12), pady=6, sticky="w")
+        goal_combo = ttk.Combobox(
+            c3, textvariable=self.campaign_goal_var, width=28, font=FONT_LABEL,
+            values=["Lead Generation", "Brand Awareness", "Customer Retention",
+                    "Re-engagement", "Product Launch", "Newsletter", "Custom"],
+        )
+        goal_combo.grid(row=0, column=1, pady=6, sticky="w")
+        label(c3, "  Choose a goal or type your own", hint=True).grid(row=0, column=2, padx=12, sticky="w")
+
+        skip_chk = tk.Checkbutton(
+            c3, text="  ⚡  Skip preview before sending",
+            variable=self.skip_preview_var,
+            bg=CARD_BG, fg=TEXT_MAIN, font=FONT_LABEL,
+            activebackground=CARD_BG, selectcolor=CARD_BG,
+        )
+        skip_chk.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4,4))
+        c3.columnconfigure(1, weight=1)
+
+        # ── Action Buttons ──
+        btn_frame = tk.Frame(master, bg=BG)
+        btn_frame.pack(fill="x", padx=20, pady=16)
+
+        self.launch_button = HoverButton(
+            btn_frame, text="🚀  Launch Campaign",
+            command=self.start_campaign_thread,
+            bg=ACCENT, hover_bg=ACCENT_DARK,
+        )
+        self.launch_button.pack(side="left", padx=(0,10))
+
+        self.schedule_button = HoverButton(
+            btn_frame, text="📅  Schedule",
+            command=self.schedule_campaign,
+            bg="#0EA5E9", hover_bg="#0284C7",
+        )
+        self.schedule_button.pack(side="left", padx=(0,10))
+
+        self.export_button = HoverButton(
+            btn_frame, text="📥  Export Log",
+            command=self.export_log,
+            bg="#10B981", hover_bg="#059669",
+            state="disabled",
+        )
+        self.export_button.pack(side="left")
+
+        # ── Progress Card ──
+        prog_card = card(master, "📊  Sending Progress", pady=0)
+
+        prog_row = tk.Frame(prog_card, bg=CARD_BG)
+        prog_row.pack(fill="x", pady=(8,4))
+
+        self.progress_label = tk.Label(prog_row, text="0%", bg=CARD_BG,
+                                       fg=ACCENT, font=FONT_HEADER, width=5)
+        self.progress_label.pack(side="left")
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Green.Horizontal.TProgressbar",
+                        troughcolor=BORDER, background=ACCENT, thickness=18)
+        self.progress_bar = ttk.Progressbar(
+            prog_row, variable=self.progress_var,
+            maximum=100, mode="determinate",
+            style="Green.Horizontal.TProgressbar",
+        )
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=8)
+        self.progress_var.trace_add("write", self._update_progress_label)
+
+        # Results treeview
+        tree_frame = tk.Frame(prog_card, bg=CARD_BG)
+        tree_frame.pack(fill="both", expand=True, pady=(4,8))
+
+        style.configure("Mailer.Treeview",
+                        background=INPUT_BG, fieldbackground=INPUT_BG,
+                        font=FONT_LABEL, rowheight=26)
+        style.configure("Mailer.Treeview.Heading",
+                        font=FONT_HEADER, background=ACCENT, foreground="#FFFFFF")
+        style.map("Mailer.Treeview", background=[("selected", ACCENT)])
+
+        self.status_tree = ttk.Treeview(
+            tree_frame, columns=("recipient", "status"),
+            show="headings", height=7, style="Mailer.Treeview",
+        )
+        self.status_tree.heading("recipient", text="  📨  Recipient")
+        self.status_tree.heading("status", text="Status")
+        self.status_tree.column("recipient", width=380, anchor="w")
+        self.status_tree.column("status", width=120, anchor="center")
+
+        tree_sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.status_tree.yview)
+        self.status_tree.configure(yscrollcommand=tree_sb.set)
+        self.status_tree.pack(side="left", fill="both", expand=True)
+        tree_sb.pack(side="right", fill="y")
+
+        self.status_tree.tag_configure("success", foreground=SUCCESS)
+        self.status_tree.tag_configure("failure", foreground=DANGER)
+
+        tk.Frame(master, bg=BG, height=20).pack()
+
+    # ─────────────────────────────────────────────
+    #  HELPERS
+    # ─────────────────────────────────────────────
+    def _update_progress_label(self, *_):
+        self.progress_label.config(text=f"{int(self.progress_var.get())}%")
+
+    # ─────────────────────────────────────────────
+    #  CORE LOGIC  (unchanged from previous version)
+    # ─────────────────────────────────────────────
+    def start_campaign_thread(self):
+        campaign_goal = self.campaign_goal_var.get()
+        sender_email  = self.sender_email_var.get().strip()
+        smtp_pass     = self.sender_pass_var.get().strip()
+        try:
+            self.transporter = SMTPTransporter(
+                user=sender_email, password=smtp_pass, strategy=campaign_goal
+            )
+        except Exception as e:
+            messagebox.showerror("SMTP Error", f"Failed to initialise SMTP:\n{e}")
+            return
+        self.send_mass_campaign()
+
     def send_mass_campaign(self):
-        # 1. Gather Data
-        sender_email = self.sender_email_var.get().strip()
-        smtp_pass = self.sender_pass_var.get().strip()
-        # Original subject entered by user
-        raw_subject = self.subject_var.get().strip()
-        # Brand configuration
-        brand_name = self.brand_name_var.get().strip()
-        brand_email = self.brand_email_var.get().strip()
+        sender_email   = self.sender_email_var.get().strip()
+        smtp_pass      = self.sender_pass_var.get().strip()
+        raw_subject    = self.subject_var.get().strip()
         subject_prefix = self.subject_prefix_var.get().strip()
-        # Build final subject with prefix
-        subject = f"{subject_prefix} {raw_subject}" if subject_prefix else raw_subject
-        body = self.body_text.get("1.0", "end-1c").strip()
+        subject        = f"{subject_prefix} {raw_subject}" if subject_prefix else raw_subject
+        body           = self.body_text.get("1.0", "end-1c").strip()
 
-        # Validate fields
         if not sender_email or not smtp_pass:
-            messagebox.showerror("Error", "Sender Email and Password must be provided.")
+            messagebox.showerror("Missing fields", "Please fill in Sender Email and SMTP Password.")
             return
         if not subject:
-            messagebox.showerror("Error", "Subject cannot be empty.")
+            messagebox.showerror("Missing fields", "Subject line cannot be empty.")
             return
         if not body:
-            messagebox.showerror("Error", "Email body cannot be empty.")
+            messagebox.showerror("Missing fields", "Email body cannot be empty.")
             return
 
-        # Extract recipients from the Text widget
         raw_recipients = self.recipient_text.get("1.0", "end-1c").strip()
         if not raw_recipients:
-            messagebox.showerror("Error", "Please enter at least one recipient email address.")
+            messagebox.showerror("No recipients", "Please enter at least one recipient email.")
             return
 
-        # Split by comma, semicolon, or newline
-        recipient_list = [r.strip() for r in re.split(r'[,;\n]+', raw_recipients) if r.strip()]
-
-        # Validate email format
-        email_regex = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
-        valid = []
-        invalid = []
+        recipient_list = [r.strip() for r in re.split(r"[,;\n]+", raw_recipients) if r.strip()]
+        email_regex    = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+        valid, invalid = [], []
         for r in recipient_list:
-            if email_regex.match(r):
-                valid.append(r)
-            else:
-                invalid.append(r)
+            (valid if email_regex.match(r) else invalid).append(r)
+
         if invalid:
-            messagebox.showwarning("Invalid Emails",
-                f"The following addresses are invalid and will be skipped:\n" + "\n".join(invalid))
-            self.logger.warning(f"Invalid recipients skipped: {invalid}")
+            messagebox.showwarning(
+                "Invalid Emails",
+                "These addresses are invalid and will be skipped:\n" + "\n".join(invalid),
+            )
         if not valid:
-            messagebox.showerror("No Valid Recipients", "No valid email addresses found.")
+            messagebox.showerror("No valid recipients", "No valid email addresses found.")
             return
-        recipient_list = valid
 
         if self.sending_state != "idle":
-            messagebox.showerror("Error", "A campaign is already in progress or scheduled.")
+            messagebox.showerror("Busy", "A campaign is already in progress.")
             return
 
-        # Preview step (unless skipped)
         if not self.skip_preview_var.get():
-            if not self.preview_email(sender_email, smtp_pass, subject, body, recipient_list):
-                self.logger.info("User cancelled email preview.")
+            if not self.preview_email(sender_email, smtp_pass, subject, body, valid):
                 return
 
-        # Lazily create transporter
-        os.environ["SMTP_USER"] = sender_email
-        os.environ["SMTP_PASSWORD"] = smtp_pass
         if self.transporter is None:
             try:
+                os.environ["SMTP_USER"]     = sender_email
+                os.environ["SMTP_PASSWORD"] = smtp_pass
                 self.transporter = SMTPTransporter()
             except Exception as e:
                 messagebox.showerror("SMTP Error", f"Failed to initialise SMTP transporter:\n{e}")
-                self.logger.error(f"SMTP init error: {e}")
                 return
 
-        # Prepare UI for sending
         self.sending_state = "sending"
         self.send_log.clear()
         self.status_tree.delete(*self.status_tree.get_children())
         self.progress_var.set(0)
-        self.status_text_var.set(f"Sending to {len(recipient_list)} recipients…")
+        self.status_text_var.set(f"Sending  —  0 / {len(valid)} done…")
         self.launch_button.config(state="disabled")
         self.schedule_button.config(state="disabled")
         self.export_button.config(state="disabled")
-        self.logger.info(f"Starting campaign to {len(recipient_list)} recipients.")
 
-        # Launch background thread
         self.sending_thread = threading.Thread(
             target=self._send_campaign_worker,
-            args=(sender_email, smtp_pass, subject, body, recipient_list),
-            daemon=True
+            args=(sender_email, smtp_pass, subject, body, valid),
+            daemon=True,
         )
         self.sending_thread.start()
 
     def reset_fields(self):
-        """Clear all input fields after a successful send."""
         self.sender_email_var.set("")
         self.sender_pass_var.set("")
         self.subject_var.set("")
         self.body_var.set("")
         self.recipient_text.delete("1.0", tk.END)
-        # Clear attachments UI and list
         self.attachments.clear()
         self.attachment_listbox.delete(0, tk.END)
-        # Reset progress and status UI
         self.progress_var.set(0)
         self.status_tree.delete(*self.status_tree.get_children())
         self.send_log.clear()
-        self.sending_state = "idle"
+        self.sending_state  = "idle"
         self.scheduled_time = None
-
-        # Re‑enable UI buttons after reset
         self.launch_button.config(state="normal")
         self.schedule_button.config(state="normal")
         self.export_button.config(state="disabled")
 
     def add_attachments(self):
-        files = filedialog.askopenfilenames(title="Select attachment files")
+        files = filedialog.askopenfilenames(title="Select files to attach")
         for f in files:
             self.attachments.append(f)
-            self.attachment_listbox.insert(tk.END, os.path.basename(f))
-        if self.attachments:
-            self.remove_attach_button.config(state="normal")
-        else:
-            self.remove_attach_button.config(state="disabled")
+            self.attachment_listbox.insert(tk.END, f"  📄  {os.path.basename(f)}")
+        self.remove_attach_button.config(state="normal" if self.attachments else "disabled")
 
     def remove_selected_attachment(self):
-        selected = list(self.attachment_listbox.curselection())
-        for idx in reversed(selected):
+        for idx in reversed(self.attachment_listbox.curselection()):
             self.attachment_listbox.delete(idx)
             del self.attachments[idx]
-        if not self.attachments:
-            self.remove_attach_button.config(state="disabled")
+        self.remove_attach_button.config(state="normal" if self.attachments else "disabled")
 
     def _update_ui_progress(self, recipient, success, current, total):
-        status = "Success" if success else "Failure"
-        self.status_tree.insert("", tk.END, values=(recipient, status))
-        progress = int((current / total) * 100)
-        self.progress_var.set(progress)
-        self.status_text_var.set(f"{current}/{total} processed")
+        tag    = "success" if success else "failure"
+        status = "✅  Sent" if success else "❌  Failed"
+        self.status_tree.insert("", tk.END, values=(recipient, status), tags=(tag,))
+        self.progress_var.set(int(current / total * 100))
+        self.status_text_var.set(f"Sending  —  {current} / {total} done…")
 
     def _finalize_send(self):
         self.sending_state = "idle"
         self.launch_button.config(state="normal")
         self.schedule_button.config(state="normal")
         self.export_button.config(state="normal")
-        successes = sum(1 for _,s,_ in self.send_log if s == "Success")
-        failures = len(self.send_log) - successes
-        msg = f"Successfully sent to {successes}/{len(self.send_log)} recipients."
+        successes = sum(1 for _, s, _ in self.send_log if s == "Success")
+        failures  = len(self.send_log) - successes
+        msg = f"✅  Sent to {successes} of {len(self.send_log)} recipients."
         if failures:
-            msg += f" {failures} failures occurred."
-        messagebox.showinfo("Send Completed", msg)
-        self.logger.info("Campaign completed: " + msg)
-        self.status_text_var.set("Completed")
-        # Reset fields after a short pause
-        self.master.after(2000, self.reset_fields)
+            msg += f"  ❌  {failures} failed."
+        messagebox.showinfo("Campaign Complete", msg)
+        self.status_text_var.set(f"Done  —  {successes} sent, {failures} failed  ✅")
+        self.master.after(3000, self.reset_fields)
 
     def send_email(self, recipient):
-        """Construct and send a single email using brand UI values.
-        Returns (success: bool, error_msg: str)."""
         try:
-            # Build the MIME message
-            msg = MIMEMultipart()
-
-            # Brand From header
-            brand_name = self.brand_name_var.get().strip()
+            msg         = MIMEMultipart()
+            brand_name  = self.brand_name_var.get().strip()
             brand_email = self.brand_email_var.get().strip()
-            msg['From'] = f"{brand_name} <{brand_email}>"
-            msg['Reply-To'] = brand_email
-            msg['To'] = recipient
-
-            # Subject with prefix
-            base_subject = self.subject_var.get().strip()
-            prefix = self.subject_prefix_var.get().strip()
-            msg['Subject'] = f"{prefix} {base_subject}" if prefix else base_subject
-
-            # Body (plain text)
-            body_text = self.body_text.get("1.0", tk.END).strip()
-            msg.attach(MIMEText(body_text, 'plain'))
-
-            # Ensure transporter exists
+            msg["From"]     = f"{brand_name} <{brand_email}>"
+            msg["Reply-To"] = brand_email
+            msg["To"]       = recipient
+            prefix          = self.subject_prefix_var.get().strip()
+            base_subject    = self.subject_var.get().strip()
+            msg["Subject"]  = f"{prefix} {base_subject}" if prefix else base_subject
+            msg.attach(MIMEText(self.body_text.get("1.0", tk.END).strip(), "plain"))
             if self.transporter is None:
                 self.transporter = SMTPTransporter()
-            spoofed_from_header = f"{brand_name} <{brand_email}>"
-            self.transporter.send(msg, recipient, from_header=spoofed_from_header)
-            self.logger.info(f"Email sent to {recipient} as {brand_name}")
+            self.transporter.send(msg, recipient, from_header=f"{brand_name} <{brand_email}>")
             return True, ""
         except Exception as e:
             self.logger.error(f"Error sending to {recipient}: {e}")
-            self.master.after(0, messagebox.showerror, "Send Error",
-                              f"Could not send to {recipient}:\n{e}")
             return False, str(e)
 
     def _send_campaign_worker(self, sender_email, smtp_pass, subject, body, recipient_list):
         total = len(recipient_list)
         for idx, recipient in enumerate(recipient_list, 1):
-            # Use the new helper to send each email
-            success, error_msg = self.send_email(recipient)
-            self.send_log.append((recipient, "Success" if success else "Failure", error_msg))
+            success, err = self.send_email(recipient)
+            self.send_log.append((recipient, "Success" if success else "Failure", err))
             self.master.after(0, self._update_ui_progress, recipient, success, idx, total)
         self.master.after(0, self._finalize_send)
 
     def schedule_campaign(self):
-        """Prompt user for a future datetime and schedule the campaign."""
-        dt_str = simpledialog.askstring("Schedule Campaign", "Enter date & time (YYYY-MM-DD HH:MM):")
+        dt_str = simpledialog.askstring(
+            "Schedule Campaign",
+            "Enter date & time to send  (YYYY-MM-DD HH:MM):",
+        )
         if not dt_str:
             return
         try:
-            schedule_time = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+            sched = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
         except ValueError:
-            messagebox.showerror("Invalid format", "Please use YYYY-MM-DD HH:MM")
+            messagebox.showerror("Invalid format", "Please use  YYYY-MM-DD HH:MM")
             return
-        now = datetime.now()
-        delay = (schedule_time - now).total_seconds()
+        delay = (sched - datetime.now()).total_seconds()
         if delay <= 0:
             messagebox.showerror("Invalid time", "Scheduled time must be in the future.")
             return
-        self.scheduled_time = schedule_time
+        self.scheduled_time = sched
         self.schedule_button.config(state="disabled")
         self.launch_button.config(state="disabled")
         threading.Timer(delay, self.send_mass_campaign).start()
-        messagebox.showinfo("Scheduled", f"Campaign scheduled for {schedule_time}")
+        messagebox.showinfo("Scheduled ✅", f"Campaign scheduled for {sched.strftime('%Y-%m-%d %H:%M')}")
+        self.status_text_var.set(f"⏰  Scheduled for {sched.strftime('%H:%M on %d %b %Y')}")
 
     def export_log(self):
         if not self.send_log:
-            messagebox.showwarning("No log", "No send log to export.")
+            messagebox.showwarning("No log", "Nothing to export yet.")
             return
-        file_path = filedialog.asksaveasfilename(defaultextension=".csv", title="Save Log As", filetypes=[("CSV files", "*.csv")])
-        if not file_path:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", title="Save Log As",
+            filetypes=[("CSV files", "*.csv")],
+        )
+        if not path:
             return
-        with open(file_path, "w", newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(["Recipient", "Status", "ErrorMessage"])
-            writer.writerows(self.send_log)
-        messagebox.showinfo("Exported", f"Log saved to {file_path}")
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows([["Recipient", "Status", "ErrorMessage"]] + self.send_log)
+        messagebox.showinfo("Exported ✅", f"Log saved to:\n{path}")
 
     def preview_email(self, sender_email, smtp_pass, subject, body, recipient_list):
-        """Show a modal preview of the email for the first recipient."""
         if not recipient_list:
             messagebox.showerror("Error", "No recipients to preview.")
             return False
-        first_recipient = recipient_list[0]
-        # Build the message for preview
-        # Use brand variables for preview as well
-        brand_name = self.brand_name_var.get().strip()
-        brand_email = self.brand_email_var.get().strip()
-        subject_prefix = self.subject_prefix_var.get().strip()
-        raw_subject = self.subject_var.get().strip()
-        preview_subject = f"{subject_prefix} {raw_subject}" if subject_prefix else raw_subject
-        from_header = f"{brand_name} <{brand_email}>"
-        self.generator.set_metadata(preview_subject, from_header, first_recipient)
-        self.generator.set_template('plain', body)
+
+        first   = recipient_list[0]
+        bn      = self.brand_name_var.get().strip()
+        be      = self.brand_email_var.get().strip()
+        prefix  = self.subject_prefix_var.get().strip()
+        raw_sub = self.subject_var.get().strip()
+        prev_sub = f"{prefix} {raw_sub}" if prefix else raw_sub
+
+        self.generator.set_metadata(prev_sub, f"{bn} <{be}>", first)
+        self.generator.set_template("plain", body)
         for att in self.attachments:
             self.generator.add_attachment(att)
         try:
-            msg_obj = self.generator.build_multipart_message({})
-            preview_content = msg_obj.as_string()
+            preview_content = self.generator.build_multipart_message({}).as_string()
         except Exception as e:
-            messagebox.showerror("Preview Error", f"Failed to build preview: {e}")
+            messagebox.showerror("Preview Error", f"Could not build preview:\n{e}")
             return False
 
-        # Create preview window
-        preview_win = tk.Toplevel(self.master)
-        preview_win.title("Email Preview")
-        preview_win.transient(self.master)
-        preview_win.grab_set()
+        win = tk.Toplevel(self.master)
+        win.title("📬  Email Preview")
+        win.geometry("820x540")
+        win.configure(bg=BG)
+        win.transient(self.master)
+        win.grab_set()
 
-        # Scrolled text for content
-        txt = ScrolledText(preview_win, width=100, height=30)
-        txt.pack(padx=10, pady=10, fill='both', expand=True)
+        tk.Label(win, text="📬  Email Preview", bg=HEADER_BG, fg="#FFFFFF",
+                 font=FONT_TITLE, anchor="w", padx=16).pack(fill="x", ipady=10)
+
+        txt = ScrolledText(win, font=FONT_MONO, bg=INPUT_BG, fg=TEXT_MAIN,
+                           relief="flat", bd=0, padx=12, pady=8)
+        txt.pack(fill="both", expand=True, padx=12, pady=12)
         txt.insert(tk.END, preview_content)
-        txt.config(state='disabled')
+        txt.config(state="disabled")
 
-        # Button frame
-        btn_frame = ttk.Frame(preview_win)
-        btn_frame.pack(pady=5)
-
-        result = {"confirmed": False}
+        result  = {"ok": False}
+        btn_row = tk.Frame(win, bg=BG)
+        btn_row.pack(pady=(0,12))
 
         def confirm():
-            result["confirmed"] = True
-            preview_win.destroy()
+            result["ok"] = True
+            win.destroy()
 
-        def cancel():
-            preview_win.destroy()
+        HoverButton(btn_row, text="✅  Send It", command=confirm,
+                    bg=SUCCESS, hover_bg="#059669").pack(side="left", padx=6)
+        HoverButton(btn_row, text="✖  Cancel", command=win.destroy,
+                    bg=DANGER, hover_bg="#B91C1C").pack(side="left", padx=6)
 
-        ttk.Button(btn_frame, text="Confirm", command=confirm).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Cancel", command=cancel).pack(side='left', padx=5)
+        self.master.wait_window(win)
+        return result["ok"]
 
-        self.master.wait_window(preview_win)
-        return result["confirmed"]
 
-# --- EXECUTION BLOCK ---
+# ─────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
     root = tk.Tk()
-    app = EmailMailerApp(root)
+    app  = EmailMailerApp(root)
     root.mainloop()
