@@ -125,15 +125,8 @@ class SMTPTransporter:
             logger.error(f"Unexpected SMTP error sending to {receiver_email}: {e}", exc_info=True)
             raise
 
-    def send(self, message_obj: MIMEMultipart, receiver_email: str, from_header: str = None) -> bool:
-        """Send an email with optional spoofed From header.
-        If from_header is provided, it overrides the message's 'From' header and envelope sender.
-        """
-        if from_header:
-            message_obj['From'] = from_header
-        return self.send_message(message_obj, receiver_email, from_header)
 
-    def send(self, from_header: str, body: str, recipients: list, attachments: list = None) -> bool:
+    def send_custom(self, from_header: str, body: str, recipients: list, attachments: list = None) -> bool:
         """Send an email with custom tracking headers.
 
         Parameters:
@@ -147,14 +140,14 @@ class SMTPTransporter:
         message['From'] = from_header
         message['To'] = ", ".join(recipients)
         message['Subject'] = "(No Subject)"
-        message.attach(email.mime.text.MIMEText(body, 'plain'))
+        message.attach(MIMEText(body, 'plain'))
 
         # Attach files if provided
         if attachments:
             for path in attachments:
                 try:
                     with open(path, 'rb') as f:
-                        part = email.mime.application.MIMEApplication(f.read(), Name=os.path.basename(path))
+                        part = MIMEApplication(f.read(), Name=os.path.basename(path))
                         part['Content-Disposition'] = f'attachment; filename="{os.path.basename(path)}"'
                         message.attach(part)
                 except Exception as e:
@@ -166,7 +159,6 @@ class SMTPTransporter:
             "Message-ID": f"<campaign_id+{datetime.datetime.utcnow().strftime('%Y%m%d')}>"
         }
         # Send using the underlying send_message method
-        # Note: smtp.sendmail does not accept a headers dict directly; we embed headers in the MIME message.
         for k, v in custom_headers.items():
             message[k] = v
         # Use the first recipient as envelope recipient

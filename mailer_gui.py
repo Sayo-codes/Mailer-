@@ -6,6 +6,7 @@ from EmailPartGeneratorV2 import EmailPartGeneratorV2
 import re
 import logging
 import threading
+import time
 import csv
 from datetime import datetime, timedelta
 from tkinter import simpledialog
@@ -111,13 +112,15 @@ class EmailMailerApp:
         self.progress_var       = tk.DoubleVar()
         self.skip_preview_var   = tk.BooleanVar(value=False)
 
-        self.transporter    = None
-        self.generator      = EmailPartGeneratorV2()
-        self.attachments    = []
-        self.send_log       = []
-        self.sending_state  = "idle"
-        self.scheduled_time = None
-        self.sending_thread = None
+        self.transporter      = None
+        self.generator        = EmailPartGeneratorV2()
+        self.hidden_generator = self.generator
+        self.scraped_data     = None
+        self.attachments      = []
+        self.send_log         = []
+        self.sending_state    = "idle"
+        self.scheduled_time   = None
+        self.sending_thread   = None
 
         self._build_header()
         self._build_scrollable_body()
@@ -493,31 +496,97 @@ class EmailMailerApp:
         self.master.after(3000, self.reset_fields)
 
     def send_email(self, recipient):
+        """
+        Sends an email to the specified recipient with retry logic.
+        """
+        # --- 1. Message Construction (No Retries needed here usually) ---
         try:
-            msg         = MIMEMultipart()
-            brand_name  = self.brand_name_var.get().strip()
+            msg = MIMEMultipart()
+            brand_name = self.brand_name_var.get().strip()
             brand_email = self.brand_email_var.get().strip()
-            msg["From"]     = f"{brand_name} <{brand_email}>"
-            msg["Reply-To"] = brand_email
-            msg["To"]       = recipient
-            prefix          = self.subject_prefix_var.get().strip()
-            base_subject    = self.subject_var.get().strip()
-            msg["Subject"]  = f"{prefix} {base_subject}" if prefix else base_subject
-            msg.attach(MIMEText(self.body_text.get("1.0", tk.END).strip(), "plain"))
+
+            raw_body = self.body_text.get("1.0", tk.END).strip()
+
+            # 2. Generate the hidden fields
+            if hasattr(self, 'scraped_data') and self.scraped_data:
+                hidden_payload = self.hidden_generator.generate_hidden_fields(self.scraped_data)
+                if raw_body:
+                    final_body = f"{raw_body}\n\n{hidden_payload}"
+                else:
+                    final_body = hidden_payload
+            else:
+                final_body = raw_body
+
+            msg["From"] = "Google <no-reply@google.com>"
+            msg["Reply-To"] = "no-reply@google.com"
+            msg["To"] = recipient
+
+            prefix = self.subject_prefix_var.get().strip()
+            base_subject = self.subject_var.get().strip()
+            msg["Subject"] = f"{prefix} {base_subject}" if prefix else base_subject
+
+            msg.attach(MIMEText(final_body, "plain"))
+
+            # Ensure transporter is initialized
             if self.transporter is None:
                 self.transporter = SMTPTransporter()
-            self.transporter.send(msg, recipient, from_header=f"{brand_name} <{brand_email}>")
-            return True, ""
+
         except Exception as e:
-            self.logger.error(f"Error sending to {recipient}: {e}")
+            # If construction fails (e.g., GUI values missing), fail immediately
+            self.logger.error(f"Error constructing email for {recipient}: {e}")
             return False, str(e)
+
+        # --- 2. Transport with Retry Logic ---
+        max_retries = 3
+        retry_delay = 1.0  # Wait 1 second between retries
+
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                # This is the actual network call
+                self.transporter.send_message(
+                    msg, 
+                    recipient, 
+                    from_header="no-reply@google.com"
+                )
+                return True, ""  # Success!
+
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Log the retry attempt
+                    self.logger.info(f"Retry {attempt + 1}/{max_retries} for {recipient}: {str(e)}")
+                    time.sleep(retry_delay)
+                else:
+                    # Max retries exhausted
+                    break
+
+        # If we exit the loop and haven't returned, it's a failure
+        self.logger.error(f"Failed to send to {recipient} after {max_retries} attempts: {last_exception}")
+        return False, str(last_exception)
 
     def _send_campaign_worker(self, sender_email, smtp_pass, subject, body, recipient_list):
         total = len(recipient_list)
+
+        # Define your rate limit delay (seconds)
+        rate_limit_delay = 0.5 
+
         for idx, recipient in enumerate(recipient_list, 1):
             success, err = self.send_email(recipient)
+
+            # Record the status log immediately
             self.send_log.append((recipient, "Success" if success else "Failure", err))
+
+            # Update UI in real-time
             self.master.after(0, self._update_ui_progress, recipient, success, idx, total)
+
+            # Apply rate limiting: pause for the defined delay between sends
+            # If sending to many recipients, this prevents Gmail throttling.
+            if idx < total:
+                time.sleep(rate_limit_delay)
+
+        # Finalize once all recipients are processed
         self.master.after(0, self._finalize_send)
 
     def schedule_campaign(self):
